@@ -47,6 +47,8 @@ struct torrent_t
   void select_peers(mutable_str_ref&, const tracker_input_t&) const;
   void select_peers6(mutable_str_ref&, const tracker_input_t&) const;
 
+  float download_multiplier = 1.0f;  // Varsayılan 1.0
+  float upload_multiplier = 1.0f;    // Varsayılan 1.0
   boost::unordered_map<std::array<char, 20>, peer_t> peers;
   time_t ctime;
   int completed = 0;
@@ -64,6 +66,8 @@ struct user_t
   int wait_time = 0;
   bool can_leech = true;
   bool marked;
+  int download_multiplier = 1;  // Varsayılan 1 (çarpan etkisi yok, 0 ise çarpma sonucu 0)
+  int upload_multiplier = 1;    // Varsayılan 1
 };
 
 const torrent_t* find_torrent(std::string_view info_hash);
