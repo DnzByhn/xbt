@@ -7,7 +7,6 @@
 #include "epoll.h"
 #include "transaction.h"
 
-#include "../misc/bvalue.h"
 
 #ifdef XBT_SYSTEMD
 #include <systemd/sd-daemon.h>
@@ -231,48 +230,69 @@ void read_db_torrents()
       t.dirty = false;
       t.tid = row[2].i();
       t.ctime = row[3].i();
-      std::string options_str = row[4];  // options sütunu
+      std::string options_str(row[4].data(), row[4].size());  // options sütunu
       if (!options_str.empty())
       {
-        try
-        {
-          bvalue options = bvalue::decode(options_str);  // bencode decode
-          if (options.type() == bvalue::t_dict)
-          {
-            auto& dict = options.as_dict();
-            if (dict.count("download_multiplier"))
-            {
-              auto& val = dict["download_multiplier"];
-              if (val.type() == bvalue::t_int)
-                t.download_multiplier = static_cast<float>(val.as_int());
-              else if (val.type() == bvalue::t_float)
-                t.download_multiplier = val.as_float();
-              else
-                t.download_multiplier = 1.0f;  // Geçersiz tip olursa varsayılan
-            }
-            else
-              t.download_multiplier = 1.0f;  // Anahtar yoksa varsayılan
+        // 2. ADIM: Değerler için varsayılanları ayarlayın (float olarak)
+        float upload_multiplier = 1.0f;
+        float download_multiplier = 1.0f;
+        
+        // 3. ADIM: String içinde 'upload_multiplier' anahtarını arayın
+        // Aradığımız anahtar: "s:17:\"upload_multiplier\";" (sonundaki i: veya d: olmadan)
+        std::string up_key = "s:17:\"upload_multiplier\";";
+        size_t start_pos = options_str.find(up_key);
+        
+        if (start_pos != std::string::npos) {
+            // Anahtarı bulduk, şimdi değerin başladığı yere gidelim (örn: "i:2;" veya "d:0.5;")
+            start_pos += up_key.length();
             
-            if (dict.count("upload_multiplier"))
-            {
-              auto& val = dict["upload_multiplier"];
-              if (val.type() == bvalue::t_int)
-                t.upload_multiplier = static_cast<float>(val.as_int());
-              else if (val.type() == bvalue::t_float)
-                t.upload_multiplier = val.as_float();
-              else
-                t.upload_multiplier = 1.0f;  // Geçersiz tip olursa varsayılan
+            // Değerin bittiği ';' karakterini bul
+            size_t end_pos = options_str.find(";", start_pos);
+            
+            if (end_pos != std::string::npos) {
+                // Değer bölümünü al (örn: "i:2" veya "d:0.5")
+                std::string value_part = options_str.substr(start_pos, end_pos - start_pos);
+                
+                // Değerin içindeki ':' karakterini bul
+                size_t colon_pos = value_part.find(":");
+                
+                if (colon_pos != std::string::npos && colon_pos + 1 < value_part.length()) {
+                    // ':' sonrasındaki asıl sayısal string'i al (örn: "2" veya "0.5")
+                    std::string num_str = value_part.substr(colon_pos + 1);
+                    try {
+                        // std::stof (String to Float) hem "2" hem de "0.5"i doğru çevirir
+                        upload_multiplier = std::stof(num_str);
+                    } catch (const std::exception& e) { /* Hata olursa varsayılan 1.0f'da kal */ }
+                }
             }
-            else
-              t.upload_multiplier = 1.0f;  // Anahtar yoksa varsayılan
-          }
         }
-        catch (...)
-        {
-          // Parse hatası olursa varsayılan 1.0 kullan
-          t.download_multiplier = 1.0f;
-          t.upload_multiplier = 1.0f;
+        
+        // 4. ADIM: String içinde 'download_multiplier' anahtarını arayın
+        // Aradığımız anahtar: "s:19:\"download_multiplier\";"
+        std::string down_key = "s:19:\"download_multiplier\";";
+        start_pos = options_str.find(down_key);
+        
+        if (start_pos != std::string::npos) {
+            // Anahtarı bulduk, değeri alalım
+            start_pos += down_key.length();
+            size_t end_pos = options_str.find(";", start_pos);
+            
+            if (end_pos != std::string::npos) {
+                std::string value_part = options_str.substr(start_pos, end_pos - start_pos);
+                size_t colon_pos = value_part.find(":");
+                
+                if (colon_pos != std::string::npos && colon_pos + 1 < value_part.length()) {
+                    std::string num_str = value_part.substr(colon_pos + 1);
+                    try {
+                        download_multiplier = std::stof(num_str);
+                    } catch (const std::exception& e) { /* Hata olursa varsayılan 1.0f'da kal */ }
+                }
+            }
         }
+
+        t.upload_multiplier = upload_multiplier;
+        t.download_multiplier = download_multiplier;
+        
       }
       else
       {
