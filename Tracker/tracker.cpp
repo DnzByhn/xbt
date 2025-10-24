@@ -7,7 +7,7 @@
 #include "epoll.h"
 #include "transaction.h"
 
-#include "misc/bvalue.h"
+#include "../misc/bvalue.h"
 
 #ifdef XBT_SYSTEMD
 #include <systemd/sd-daemon.h>
