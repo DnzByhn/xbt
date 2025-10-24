@@ -7,6 +7,8 @@
 #include "epoll.h"
 #include "transaction.h"
 
+#include "misc/bvalue.h"
+
 #ifdef XBT_SYSTEMD
 #include <systemd/sd-daemon.h>
 #endif
@@ -217,7 +219,7 @@ void read_db_torrents()
     }
     if (g_config.auto_register_ && !g_torrents.empty())
       return;
-    for (auto row : query("select info_hash, @completed, @tid, ctime from @torrents where @tid >= ?", g_tid_end))
+    for (auto row : query("select info_hash, @completed, @tid, ctime, options from @torrents where @tid >= ?", g_tid_end))
     {
       g_tid_end = max<int>(g_tid_end, row[2].i() + 1);
       if (row[0].size() != 20 || find_torrent(row[0]))
@@ -229,6 +231,54 @@ void read_db_torrents()
       t.dirty = false;
       t.tid = row[2].i();
       t.ctime = row[3].i();
+      std::string options_str = row[4];  // options sütunu
+      if (!options_str.empty())
+      {
+        try
+        {
+          bvalue options = bvalue::decode(options_str);  // bencode decode
+          if (options.type() == bvalue::t_dict)
+          {
+            auto& dict = options.as_dict();
+            if (dict.count("download_multiplier"))
+            {
+              auto& val = dict["download_multiplier"];
+              if (val.type() == bvalue::t_int)
+                t.download_multiplier = static_cast<float>(val.as_int());
+              else if (val.type() == bvalue::t_float)
+                t.download_multiplier = val.as_float();
+              else
+                t.download_multiplier = 1.0f;  // Geçersiz tip olursa varsayılan
+            }
+            else
+              t.download_multiplier = 1.0f;  // Anahtar yoksa varsayılan
+            
+            if (dict.count("upload_multiplier"))
+            {
+              auto& val = dict["upload_multiplier"];
+              if (val.type() == bvalue::t_int)
+                t.upload_multiplier = static_cast<float>(val.as_int());
+              else if (val.type() == bvalue::t_float)
+                t.upload_multiplier = val.as_float();
+              else
+                t.upload_multiplier = 1.0f;  // Geçersiz tip olursa varsayılan
+            }
+            else
+              t.upload_multiplier = 1.0f;  // Anahtar yoksa varsayılan
+          }
+        }
+        catch (...)
+        {
+          // Parse hatası olursa varsayılan 1.0 kullan
+          t.download_multiplier = 1.0f;
+          t.upload_multiplier = 1.0f;
+        }
+      }
+      else
+      {
+        t.download_multiplier = 1.0f;  // Varsayılan
+        t.upload_multiplier = 1.0f;
+      }
     }
   }
   catch (bad_query&)
@@ -252,6 +302,8 @@ void read_db_users()
       q += ", torrent_pass_version";
     if (g_read_users_wait_time)
       q += ", wait_time";
+    // Yeni: çarpanları ekle
+    q += ", download_multiplier, upload_multiplier";
     q += " from @users";
     Csql_result result = q.execute();
     g_users.reserve(result.size());
@@ -278,6 +330,10 @@ void read_db_users()
         user.torrent_pass_version = row[c++].i();
       if (g_read_users_wait_time)
         user.wait_time = row[c++].i();
+
+      // Yeni: çarpanları oku
+      user.download_multiplier = row[c++].i();  // 0 veya 1
+      user.upload_multiplier = row[c++].i();    // 0 veya 1
     }
     for (auto i = g_users.begin(); i != g_users.end(); )
     {
@@ -723,6 +779,13 @@ string srv_insert_peer(const tracker_input_t& in, bool udp, user_t* user)
       downloaded = in.downloaded_ - p->downloaded;
       uploaded = in.uploaded_ - p->uploaded;
     }
+
+    // Çarpanları uygula: torrent çarpanı * kullanıcı çarpanı
+    float total_download_multiplier = t.download_multiplier * static_cast<float>(user->download_multiplier);
+    float total_upload_multiplier = t.upload_multiplier * static_cast<float>(user->upload_multiplier);
+    downloaded = static_cast<long long>(downloaded * total_download_multiplier);
+    uploaded = static_cast<long long>(uploaded * total_upload_multiplier);
+
     g_torrents_users_updates_buffer += make_query(g_database, "(?,?,?,?,?,?,?,?),",
       in.event_ != tracker_input_t::e_stopped,
       in.event_ == tracker_input_t::e_completed,
